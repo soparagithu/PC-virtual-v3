@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="utf-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" version="4"><Item class="Folder" referent="RBX0"><Properties><string name="Name">MATUTO_SHOP_PRO</string></Properties><Item class="Script" referent="RBX1"><Properties><string name="Name">MatutoServer</string><bool name="Disabled">false</bool><ProtectedString name="Source">-- MATUTO SHOP PRO | BY LD
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local NPC_NAME = "Matuto"
+local MONEY_NAME = "Dinheiro"
+local PRECO_PADRAO = 15000
+
+-- ITENS QUE NAO SERAO VENDIDOS
+local ItensBloqueados = {
+    ["Algema"] = true,
+    ["Radio"] = true,
+    ["Celular"] = true,
+    ["Mochila"] = true,
+}
+
+-- EDITE OS PRECOS AQUI (MINIMO R$10.000)
+local Precos = {
+    ["Pistola"] = 15000,
+    ["Glock"] = 20000,
+    ["Desert Eagle"] = 35000,
+    ["MP5"] = 45000,
+    ["AK-47"] = 65000,
+    ["M4A1"] = 80000,
+    ["Sniper"] = 95000,
+}
+
+local remotes = ReplicatedStorage:FindFirstChild("MatutoRemotes") or Instance.new("Folder")
+remotes.Name = "MatutoRemotes"
+remotes.Parent = ReplicatedStorage
+
+local function remote(name, class)
+    local obj = remotes:FindFirstChild(name) or Instance.new(class)
+    obj.Name = name
+    obj.Parent = remotes
+    return obj
+end
+
+local abrir = remote("AbrirLoja", "RemoteEvent")
+local catalogo = remote("BuscarItens", "RemoteFunction")
+local comprar = remote("ComprarItem", "RemoteFunction")
+
+local npc = workspace:WaitForChild(NPC_NAME, 30)
+if not npc then
+    warn("[MATUTO SHOP] NPC 'Matuto' nao encontrado no Workspace.")
+    return
+end
+
+local parte = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head") or npc:FindFirstChildWhichIsA("BasePart")
+if not parte then
+    warn("[MATUTO SHOP] O NPC precisa ter uma parte fisica.")
+    return
+end
+
+local prompt = parte:FindFirstChild("MatutoPrompt") or Instance.new("ProximityPrompt")
+prompt.Name = "MatutoPrompt"
+prompt.ActionText = "Comprar armas"
+prompt.ObjectText = "MATUTO"
+prompt.HoldDuration = 0
+prompt.MaxActivationDistance = 10
+prompt.RequiresLineOfSight = false
+prompt.Parent = parte
+
+local function preco(tool)
+    return math.max(10000, tonumber(Precos[tool.Name]) or PRECO_PADRAO)
+end
+
+local function caminho(tool)
+    local nomes = {}
+    local atual = tool
+    while atual and atual ~= ServerStorage do
+        table.insert(nomes, 1, atual.Name)
+        atual = atual.Parent
+    end
+    return table.concat(nomes, "/")
+end
+
+local function encontrar(id)
+    for _, obj in ipairs(ServerStorage:GetDescendants()) do
+        if obj:IsA("Tool") and caminho(obj) == id then
+            return obj
+        end
+    end
+end
+
+local function listar()
+    local lista = {}
+    for _, obj in ipairs(ServerStorage:GetDescendants()) do
+        if obj:IsA("Tool") and not ItensBloqueados[obj.Name] then
+            table.insert(lista, {
+                id = caminho(obj),
+                nome = obj.Name,
+                preco = preco(obj)
+            })
+        end
+    end
+    table.sort(lista, function(a, b)
+        return a.nome:lower() &lt; b.nome:lower()
+    end)
+    return lista
+end
+
+local function perto(player)
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    return root and (root.Position - parte.Position).Magnitude &lt;= 18
+end
+
+prompt.Triggered:Connect(function(player)
+    if perto(player) then
+        abrir:FireClient(player)
+    end
+end)
+
+catalogo.OnServerInvoke = function(player)
+    if not perto(player) then return {} end
+    return listar()
+end
+
+local ultimaCompra = {}
+comprar.OnServerInvoke = function(player, id)
+    if typeof(id) ~= "string" or #id &gt; 300 then
+        return false, "Item invalido."
+    end
+    if not perto(player) then
+        return false, "Chegue mais perto do Matuto."
+    end
+    local agora = os.clock()
+    if ultimaCompra[player] and agora - ultimaCompra[player] &lt; 0.7 then
+        return false, "Aguarde um instante."
+    end
+    ultimaCompra[player] = agora
+
+    local tool = encontrar(id)
+    if not tool or ItensBloqueados[tool.Name] then
+        return false, "Este item nao esta disponivel."
+    end
+
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    local dinheiro = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild(MONEY_NAME)
+    if not backpack or not dinheiro or not (dinheiro:IsA("IntValue") or dinheiro:IsA("NumberValue")) then
+        return false, "Nao encontrei leaderstats.Dinheiro."
+    end
+
+    local valor = preco(tool)
+    if dinheiro.Value &lt; valor then
+        return false, "Dinheiro insuficiente!"
+    end
+
+    dinheiro.Value = dinheiro.Value - valor
+    local copia = tool:Clone()
+    copia.Parent = backpack
+    return true, "Compra realizada: " .. tool.Name
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    ultimaCompra[player] = nil
+end)
+
+print("[MATUTO SHOP PRO] Sistema iniciado com sucesso.")
+</ProtectedString></Properties></Item><Item class="LocalScript" referent="RBX2"><Properties><string name="Name">MatutoClient</string><bool name="Disabled">false</bool><ProtectedString name="Source">-- MATUTO SHOP PRO | CLIENT | BY LD
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
+local remotes = ReplicatedStorage:WaitForChild("MatutoRemotes")
+local abrir = remotes:WaitForChild("AbrirLoja")
+local buscar = remotes:WaitForChild("BuscarItens")
+local comprar = remotes:WaitForChild("ComprarItem")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MatutoShopGUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Enabled = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local fundo = Instance.new("Frame")
+fundo.Name = "Janela"
+fundo.Size = UDim2.new(0.88, 0, 0.76, 0)
+fundo.Position = UDim2.new(0.5, 0, 0.5, 0)
+fundo.AnchorPoint = Vector2.new(0.5, 0.5)
+fundo.BackgroundColor3 = Color3.fromRGB(13, 13, 16)
+fundo.BorderSizePixel = 0
+fundo.Parent = gui
+Instance.new("UICorner", fundo).CornerRadius = UDim.new(0, 14)
+
+local limite = Instance.new("UISizeConstraint")
+limite.MinSize = Vector2.new(290, 330)
+limite.MaxSize = Vector2.new(600, 650)
+limite.Parent = fundo
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(190, 145, 48)
+stroke.Thickness = 1.5
+stroke.Parent = fundo
+
+local topo = Instance.new("Frame")
+topo.Size = UDim2.new(1, 0, 0, 65)
+topo.BackgroundColor3 = Color3.fromRGB(25, 23, 19)
+topo.BorderSizePixel = 0
+topo.Parent = fundo
+Instance.new("UICorner", topo).CornerRadius = UDim.new(0, 14)
+
+local titulo = Instance.new("TextLabel")
+titulo.Size = UDim2.new(1, -65, 0, 34)
+titulo.Position = UDim2.new(0, 18, 0, 7)
+titulo.BackgroundTransparency = 1
+titulo.Text = "MATUTO SHOP"
+titulo.TextColor3 = Color3.fromRGB(232, 190, 91)
+titulo.Font = Enum.Font.GothamBlack
+titulo.TextSize = 21
+titulo.TextXAlignment = Enum.TextXAlignment.Left
+titulo.Parent = topo
+
+local subtitulo = Instance.new("TextLabel")
+subtitulo.Size = UDim2.new(1, -65, 0, 18)
+subtitulo.Position = UDim2.new(0, 19, 0, 39)
+subtitulo.BackgroundTransparency = 1
+subtitulo.Text = "ARMAS E EQUIPAMENTOS"
+subtitulo.TextColor3 = Color3.fromRGB(160, 160, 160)
+subtitulo.Font = Enum.Font.Gotham
+subtitulo.TextSize = 10
+subtitulo.TextXAlignment = Enum.TextXAlignment.Left
+subtitulo.Parent = topo
+
+local fechar = Instance.new("TextButton")
+fechar.Size = UDim2.new(0, 38, 0, 38)
+fechar.Position = UDim2.new(1, -49, 0, 13)
+fechar.BackgroundColor3 = Color3.fromRGB(55, 35, 30)
+fechar.Text = "X"
+fechar.TextColor3 = Color3.new(1,1,1)
+fechar.Font = Enum.Font.GothamBold
+fechar.TextSize = 16
+fechar.Parent = topo
+Instance.new("UICorner", fechar).CornerRadius = UDim.new(0, 9)
+
+local aviso = Instance.new("TextLabel")
+aviso.Size = UDim2.new(1, -30, 0, 28)
+aviso.Position = UDim2.new(0, 15, 0, 72)
+aviso.BackgroundTransparency = 1
+aviso.Text = "Selecione um item para comprar"
+aviso.TextColor3 = Color3.fromRGB(190, 190, 190)
+aviso.Font = Enum.Font.Gotham
+aviso.TextSize = 12
+aviso.TextXAlignment = Enum.TextXAlignment.Left
+aviso.Parent = fundo
+
+local lista = Instance.new("ScrollingFrame")
+lista.Name = "ListaDeItens"
+lista.Size = UDim2.new(1, -26, 1, -116)
+lista.Position = UDim2.new(0, 13, 0, 105)
+lista.BackgroundColor3 = Color3.fromRGB(19, 19, 23)
+lista.BorderSizePixel = 0
+lista.ScrollBarThickness = 5
+lista.ScrollBarImageColor3 = Color3.fromRGB(190, 145, 48)
+lista.AutomaticCanvasSize = Enum.AutomaticSize.Y
+lista.CanvasSize = UDim2.new()
+lista.Parent = fundo
+Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 10)
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 8)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = lista
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 9)
+padding.PaddingBottom = UDim.new(0, 9)
+padding.PaddingLeft = UDim.new(0, 9)
+padding.PaddingRight = UDim.new(0, 9)
+padding.Parent = lista
+
+local function limpar()
+    for _, obj in ipairs(lista:GetChildren()) do
+        if obj:IsA("Frame") then obj:Destroy() end
+    end
+end
+
+local function carregar()
+    limpar()
+    aviso.Text = "Carregando itens..."
+    local sucesso, itens = pcall(function()
+        return buscar:InvokeServer()
+    end)
+    if not sucesso or type(itens) ~= "table" then
+        aviso.Text = "Nao foi possivel carregar a loja."
+        return
+    end
+    if #itens == 0 then
+        aviso.Text = "Nenhuma Tool disponivel no ServerStorage."
+        return
+    end
+    aviso.Text = tostring(#itens) .. " itens disponiveis | minimo $10.000"
+    for indice, item in ipairs(itens) do
+        local cartao = Instance.new("Frame")
+        cartao.Name = "Item"
+        cartao.Size = UDim2.new(1, -2, 0, 66)
+        cartao.BackgroundColor3 = Color3.fromRGB(34, 34, 39)
+        cartao.BorderSizePixel = 0
+        cartao.LayoutOrder = indice
+        cartao.Parent = lista
+        Instance.new("UICorner", cartao).CornerRadius = UDim.new(0, 8)
+
+        local nome = Instance.new("TextLabel")
+        nome.Size = UDim2.new(0.56, -8, 0, 27)
+        nome.Position = UDim2.new(0, 12, 0, 8)
+        nome.BackgroundTransparency = 1
+        nome.Text = tostring(item.nome)
+        nome.TextColor3 = Color3.fromRGB(245, 245, 245)
+        nome.Font = Enum.Font.GothamBold
+        nome.TextSize = 14
+        nome.TextXAlignment = Enum.TextXAlignment.Left
+        nome.TextTruncate = Enum.TextTruncate.AtEnd
+        nome.Parent = cartao
+
+        local preco = Instance.new("TextLabel")
+        preco.Size = UDim2.new(0.56, -8, 0, 20)
+        preco.Position = UDim2.new(0, 12, 0, 34)
+        preco.BackgroundTransparency = 1
+        preco.Text = "$" .. tostring(item.preco)
+        preco.TextColor3 = Color3.fromRGB(226, 184, 82)
+        preco.Font = Enum.Font.Gotham
+        preco.TextSize = 12
+        preco.TextXAlignment = Enum.TextXAlignment.Left
+        preco.Parent = cartao
+
+        local botao = Instance.new("TextButton")
+        botao.Size = UDim2.new(0, 105, 0, 38)
+        botao.Position = UDim2.new(1, -116, 0.5, -19)
+        botao.BackgroundColor3 = Color3.fromRGB(174, 128, 42)
+        botao.Text = "COMPRAR"
+        botao.TextColor3 = Color3.fromRGB(20, 18, 14)
+        botao.Font = Enum.Font.GothamBlack
+        botao.TextSize = 12
+        botao.Parent = cartao
+        Instance.new("UICorner", botao).CornerRadius = UDim.new(0, 7)
+
+        botao.Activated:Connect(function()
+            botao.Active = false
+            botao.Text = "..."
+            local ok, mensagem = pcall(function()
+                return comprar:InvokeServer(item.id)
+            end)
+            if ok then
+                aviso.Text = tostring(mensagem)
+            else
+                aviso.Text = "Erro ao realizar compra."
+            end
+            botao.Text = "COMPRAR"
+            botao.Active = true
+        end)
+    end
+end
+
+fechar.Activated:Connect(function()
+    gui.Enabled = false
+end)
+
+abrir.OnClientEvent:Connect(function()
+    gui.Enabled = true
+    carregar()
+end)
+</ProtectedString></Properties></Item></Item></roblox>
